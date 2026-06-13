@@ -43,6 +43,142 @@ def convert_numpy(obj):
     return obj
 
 
+def compute_enhanced_feature_importance(clf, feature_cols):
+    importances = clf.feature_importances_
+    indices = np.argsort(importances)[::-1]
+
+    sorted_features = []
+    cumulative = 0.0
+    for rank, idx in enumerate(indices, 1):
+        feat_name = feature_cols[idx]
+        importance = float(importances[idx])
+        cumulative += importance
+
+        if importance >= 0.5:
+            level = 'critical'
+        elif importance >= 0.2:
+            level = 'high'
+        elif importance >= 0.05:
+            level = 'medium'
+        elif importance > 0:
+            level = 'low'
+        else:
+            level = 'none'
+
+        sorted_features.append({
+            'rank': rank,
+            'feature': feat_name,
+            'importance': importance,
+            'importance_percent': round(importance * 100, 2),
+            'cumulative_importance': round(cumulative, 6),
+            'cumulative_percent': round(cumulative * 100, 2),
+            'importance_level': level
+        })
+
+    non_zero = [f for f in sorted_features if f['importance'] > 0]
+    zero_features = [f['feature'] for f in sorted_features if f['importance'] == 0]
+
+    return {
+        'raw': dict(zip(feature_cols, importances.tolist())),
+        'sorted': sorted_features,
+        'non_zero_count': len(non_zero),
+        'zero_features': zero_features,
+        'top_features': [f['feature'] for f in non_zero[:5]] if non_zero else [],
+        'total_importance': round(float(np.sum(importances)), 6)
+    }
+
+
+def compute_sample_feature_contribution(clf, feature_cols, sample, label_encoders=None):
+    tree = clf.tree_
+    feature = tree.feature
+    threshold = tree.threshold
+    children_left = tree.children_left
+    children_right = tree.children_right
+    value = tree.value
+
+    if hasattr(sample, 'iloc'):
+        x_sample = sample
+    else:
+        x_sample = pd.DataFrame([sample], columns=feature_cols)
+
+    x_sample_encoded = x_sample.copy()
+    if label_encoders:
+        for col in feature_cols:
+            if col in label_encoders:
+                le = label_encoders[col]
+                try:
+                    x_sample_encoded[col] = le.transform([str(x_sample_encoded[col].iloc[0])])[0]
+                except:
+                    pass
+
+    node_indicator = clf.decision_path(x_sample_encoded)
+    leaf_id = clf.apply(x_sample_encoded)[0]
+
+    sample_id = 0
+    node_index = node_indicator.indices[
+        node_indicator.indptr[sample_id]:node_indicator.indptr[sample_id + 1]
+    ]
+
+    path_features = []
+    for node_id in node_index:
+        if leaf_id == node_id:
+            continue
+        feat_idx = feature[node_id]
+        if feat_idx < 0 or feat_idx >= len(feature_cols):
+            continue
+        feat_name = feature_cols[feat_idx]
+        orig_val = x_sample.iloc[0, feat_idx]
+        thresh = threshold[node_id]
+
+        if children_left[node_id] != children_right[node_id]:
+            encoded_val = x_sample_encoded.iloc[0, feat_idx]
+            if encoded_val <= thresh:
+                direction = '≤'
+                next_node = children_left[node_id]
+            else:
+                direction = '>'
+                next_node = children_right[node_id]
+
+            node_value = value[node_id]
+            if node_value.shape[0] > 0:
+                class_counts = node_value[0].astype(int)
+                total = class_counts.sum()
+            else:
+                class_counts = []
+                total = 0
+
+            path_features.append({
+                'feature': feat_name,
+                'value': float(orig_val) if isinstance(orig_val, (np.floating, np.integer)) else orig_val,
+                'threshold': round(float(thresh), 4),
+                'direction': direction,
+                'node_id': int(node_id),
+                'next_node': int(next_node),
+                'node_samples': int(total),
+                'class_distribution': class_counts.tolist() if len(class_counts) > 0 else []
+            })
+
+    leaf_value = value[leaf_id][0]
+    leaf_total = leaf_value.sum()
+
+    prediction_contribution = []
+    for feat in path_features:
+        prediction_contribution.append({
+            'feature': feat['feature'],
+            'value': feat['value'],
+            'decision': f"{feat['feature']} = {feat['value']} {feat['direction']} {feat['threshold']}",
+            'contribution_percent': round(100.0 / len(path_features), 1) if path_features else 0
+        })
+
+    return {
+        'decision_path': path_features,
+        'prediction_contribution': prediction_contribution,
+        'leaf_id': int(leaf_id),
+        'leaf_samples': int(leaf_total),
+        'decision_depth': len(path_features)
+    }
+
+
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -228,7 +364,8 @@ def train_model():
         else:
             report = classification_report(y_test, y_test_pred, output_dict=True)
 
-        feature_importance = dict(zip(feature_cols, clf.feature_importances_.tolist()))
+        feature_importance_full = compute_enhanced_feature_importance(clf, feature_cols)
+        feature_importance = feature_importance_full['raw']
 
         model_id = str(uuid.uuid4())
         model_path = os.path.join(app.config['MODEL_FOLDER'], f"{model_id}.pkl")
@@ -260,6 +397,7 @@ def train_model():
             'test_accuracy': float(test_acc),
             'classification_report': report,
             'feature_importance': feature_importance,
+            'feature_importance_full': feature_importance_full,
             'tree_structure': tree_structure,
             'train_time': datetime.now().isoformat()
         }
@@ -270,6 +408,7 @@ def train_model():
             'test_accuracy': round(float(test_acc), 4),
             'accuracy_gap': round(float(acc_gap), 4),
             'feature_importance': feature_importance,
+            'feature_importance_enhanced': feature_importance_full,
             'tree_structure': tree_structure,
             'classification_report': report,
             'class_names': class_names,
@@ -312,11 +451,60 @@ def get_model_info(model_id):
     return jsonify(info)
 
 
+@app.route('/api/models/<model_id>/feature_importance', methods=['GET'])
+def get_feature_importance(model_id):
+    if model_id not in model_store:
+        return jsonify({'error': '模型不存在'}), 404
+
+    info = model_store[model_id]
+
+    format_type = request.args.get('format', 'full')
+    top_n = request.args.get('top_n', type=int, default=None)
+    min_importance = request.args.get('min_importance', type=float, default=0.0)
+
+    if 'feature_importance_full' in info:
+        fi = info['feature_importance_full']
+    else:
+        clf = None
+        with open(info['model_path'], 'rb') as f:
+            saved = pickle.load(f)
+            clf = saved['model']
+        fi = compute_enhanced_feature_importance(clf, info['feature_columns'])
+
+    result = {}
+
+    if format_type == 'raw':
+        result = fi['raw']
+    elif format_type == 'sorted':
+        sorted_feats = fi['sorted']
+        if min_importance > 0:
+            sorted_feats = [f for f in sorted_feats if f['importance'] >= min_importance]
+        if top_n:
+            sorted_feats = sorted_feats[:top_n]
+        result = {'features': sorted_feats}
+    elif format_type == 'summary':
+        result = {
+            'non_zero_count': fi['non_zero_count'],
+            'zero_features': fi['zero_features'],
+            'top_features': fi['top_features'],
+            'total_importance': fi['total_importance']
+        }
+    else:
+        result = fi
+
+    return jsonify({
+        'model_id': model_id,
+        'target_column': info['target_column'],
+        'feature_importance': result
+    })
+
+
 @app.route('/api/predict', methods=['POST'])
 def predict():
     req = request.get_json()
     model_id = req.get('model_id')
     samples = req.get('samples')
+    return_contribution = req.get('return_contribution', False)
 
     if not model_id or not samples:
         return jsonify({'error': '缺少必要参数: model_id 和 samples'}), 400
@@ -371,16 +559,40 @@ def predict():
                     cls_key = cls.item() if hasattr(cls, 'item') else cls
                     prob_dict[str(cls_key)] = round(float(probabilities[i][j]), 4)
 
-            result.append({
+            pred_result = {
                 'prediction': pred_label,
                 'probabilities': prob_dict
-            })
+            }
 
-        return jsonify({
+            if return_contribution:
+                try:
+                    orig_sample = samples[i] if isinstance(samples[i], dict) else dict(zip(feature_cols, X.iloc[i].tolist()))
+                    contribution = compute_sample_feature_contribution(
+                        clf, feature_cols, orig_sample, label_encoders
+                    )
+                    pred_result['feature_contribution'] = contribution
+                except Exception as ce:
+                    pred_result['feature_contribution_error'] = str(ce)
+
+            result.append(pred_result)
+
+        response = {
             'model_id': model_id,
             'predictions': result,
             'prediction_count': len(result)
-        })
+        }
+
+        if return_contribution:
+            feature_importance_summary = None
+            if 'feature_importance_full' in model_store[model_id]:
+                fi = model_store[model_id]['feature_importance_full']
+                feature_importance_summary = {
+                    'top_features': fi['top_features'],
+                    'non_zero_count': fi['non_zero_count']
+                }
+            response['feature_importance_summary'] = feature_importance_summary
+
+        return jsonify(response)
 
     except Exception as e:
         return jsonify({'error': f'预测失败: {str(e)}'}), 500

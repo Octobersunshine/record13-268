@@ -399,9 +399,13 @@ table tr:hover { background: #f7fafc; }
     <div class="card" id="predict-card" style="display:none;">
         <h2>🔮 步骤 3：预测新样本</h2>
         <div id="predict-form-area"></div>
-        <div style="margin-top:16px; display:flex; gap:12px;">
+        <div style="margin-top:16px; display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
             <button class="btn" id="predictBtn">✨ 执行预测</button>
             <button class="btn btn-secondary" id="addRowBtn">➕ 增加样本</button>
+            <label class="checkbox-item" style="margin-left:8px;">
+                <input type="checkbox" id="showContribution" checked>
+                <span>显示特征贡献分析</span>
+            </label>
         </div>
         <div id="predict-result" style="display:none;"></div>
     </div>
@@ -611,18 +615,66 @@ function renderTrainResult(data) {
     html += '</div>';
 
     html += '<div class="section-subtitle">特征重要性</div>';
+
+    let enhancedFi = data.feature_importance_enhanced;
+    if (!enhancedFi || !enhancedFi.sorted) {
+        const sortedFeats = Object.entries(data.feature_importance).sort((a, b) => b[1] - a[1]);
+        enhancedFi = { sorted: sortedFeats.map(([name, imp], i) => ({
+            rank: i + 1,
+            feature: name,
+            importance: imp,
+            importance_percent: (imp * 100).toFixed(2),
+            importance_level: imp >= 0.5 ? 'critical' : imp >= 0.2 ? 'high' : imp >= 0.05 ? 'medium' : imp > 0 ? 'low' : 'none'
+        }))};
+    }
+
+    if (enhancedFi.zero_features && enhancedFi.zero_features.length > 0) {
+        html += `<div class="alert alert-info" style="margin-bottom:12px;">
+            <strong>ℹ️ 无贡献特征：</strong>${enhancedFi.zero_features.join(', ')}（对分类无影响）
+        </div>`;
+    }
+
     html += '<div class="feature-bars">';
-    const sortedFeats = Object.entries(data.feature_importance).sort((a, b) => b[1] - a[1]);
-    const maxImp = Math.max(...sortedFeats.map(x => x[1]), 0.0001);
-    sortedFeats.forEach(([name, imp]) => {
-        const pct = (imp / maxImp * 100).toFixed(0);
+    enhancedFi.sorted.forEach(f => {
+        const pct = (f.importance_percent / enhancedFi.sorted[0].importance_percent * 100).toFixed(0);
+        let barColor = 'linear-gradient(90deg, #667eea, #764ba2)';
+        let levelTag = '';
+        if (f.importance_level === 'critical') {
+            barColor = 'linear-gradient(90deg, #e53e3e, #c53030)';
+            levelTag = '<span class="tag" style="background:#fed7d7;color:#c53030;font-size:0.65rem;">核心</span>';
+        } else if (f.importance_level === 'high') {
+            barColor = 'linear-gradient(90deg, #ed8936, #dd6b20)';
+            levelTag = '<span class="tag" style="background:#feebc8;color:#c05621;font-size:0.65rem;">重要</span>';
+        } else if (f.importance_level === 'medium') {
+            barColor = 'linear-gradient(90deg, #4299e1, #2b6cb0)';
+            levelTag = '<span class="tag" style="background:#bee3f8;color:#2c5282;font-size:0.65rem;">中等</span>';
+        } else if (f.importance_level === 'low') {
+            barColor = 'linear-gradient(90deg, #667eea, #764ba2)';
+            levelTag = '<span class="tag" style="background:#e9d8fd;color:#553c9a;font-size:0.65rem;">微弱</span>';
+        } else {
+            barColor = 'linear-gradient(90deg, #a0aec0, #718096)';
+            levelTag = '<span class="tag" style="background:#edf2f7;color:#718096;font-size:0.65rem;">无</span>';
+        }
         html += `<div class="feat-item">
-            <div class="fname">${name}</div>
-            <div class="fbar"><div class="fbar-fill" style="width:${pct}%"></div></div>
-            <div class="fval">${imp.toFixed(4)}</div>
+            <div class="fname" style="display:flex;align-items:center;gap:6px;">
+                <span style="color:#a0aec0;font-weight:600;">#${f.rank}</span>
+                ${f.feature}
+                ${levelTag}
+            </div>
+            <div class="fbar"><div class="fbar-fill" style="width:${pct}%;background:${barColor}"></div></div>
+            <div class="fval">${f.importance_percent}%</div>
         </div>`;
     });
     html += '</div>';
+
+    if (enhancedFi.top_features && enhancedFi.top_features.length > 0) {
+        html += `<div style="margin-top:16px; padding:12px; background:#f7fafc; border-radius:8px;">
+            <div style="font-size:0.85rem; font-weight:600; color:#4a5568; margin-bottom:6px;">🏆 Top 关键特征：</div>
+            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                ${enhancedFi.top_features.map(f => `<span class="tag tag-success" style="font-size:0.8rem;">${f}</span>`).join('')}
+            </div>
+        </div>`;
+    }
 
     area.innerHTML = html;
 }
@@ -673,10 +725,15 @@ document.getElementById('predictBtn').addEventListener('click', async () => {
     }
 
     try {
+        const showContrib = document.getElementById('showContribution').checked;
         const resp = await fetch('/api/predict', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model_id: currentModelId, samples })
+            body: JSON.stringify({ 
+                model_id: currentModelId, 
+                samples,
+                return_contribution: showContrib
+            })
         });
         const data = await resp.json();
         if (!resp.ok) throw new Error(data.error || '预测失败');
@@ -693,6 +750,16 @@ function renderPredictResult(data) {
     const area = document.getElementById('predict-result');
     area.style.display = 'block';
     let html = `<h3 style="color:#4a5568; margin-bottom:16px;">📋 预测结果（共 ${data.prediction_count} 个样本）</h3>`;
+    
+    if (data.feature_importance_summary && data.feature_importance_summary.top_features) {
+        html += `<div style="margin-bottom:16px; padding:12px; background:#f7fafc; border-radius:8px;">
+            <div style="font-size:0.85rem; font-weight:600; color:#4a5568; margin-bottom:6px;">📊 模型关键特征：</div>
+            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                ${data.feature_importance_summary.top_features.map(f => `<span class="tag tag-success" style="font-size:0.8rem;">${f}</span>`).join('')}
+            </div>
+        </div>`;
+    }
+
     data.predictions.forEach((p, i) => {
         html += `<div class="prediction-result" style="margin-bottom:16px;">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
@@ -709,7 +776,45 @@ function renderPredictResult(data) {
                 <div class="pct">${pct}%</div>
             </div>`;
         });
-        html += '</div></div>';
+        html += '</div>';
+
+        if (p.feature_contribution && p.feature_contribution.prediction_contribution) {
+            const contrib = p.feature_contribution;
+            html += `<div style="margin-top:16px; padding-top:16px; border-top:1px solid rgba(255,255,255,0.2);">
+                <div style="font-size:0.95rem; font-weight:600; margin-bottom:10px;">🔍 特征贡献分析（决策深度：${contrib.decision_depth} 层）</div>`;
+            
+            if (contrib.prediction_contribution && contrib.prediction_contribution.length > 0) {
+                html += `<div style="margin-bottom:12px;">`;
+                contrib.prediction_contribution.forEach((pc, idx) => {
+                    html += `<div style="display:flex; align-items:center; gap:10px; margin-bottom:6px;">
+                        <span style="width:24px; height:24px; background:rgba(255,255,255,0.2); border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:0.75rem; font-weight:600;">${idx + 1}</span>
+                        <span style="flex:1; font-size:0.9rem;">${pc.decision}</span>
+                        <span style="font-size:0.75rem; opacity:0.8;">${pc.contribution_percent}%</span>
+                    </div>`;
+                });
+                html += `</div>`;
+            }
+
+            if (contrib.decision_path && contrib.decision_path.length > 0) {
+                html += `<div style="font-size:0.8rem; opacity:0.85; margin-top:10px;">
+                    <strong>完整决策路径：</strong>
+                    ${contrib.decision_path.map(dp => 
+                        `<code style="background:rgba(0,0,0,0.15); padding:2px 6px; border-radius:4px; margin:0 4px;">${dp.feature} ${dp.direction} ${dp.threshold}</code>`
+                    ).join(' → ')}
+                    <div style="margin-top:6px;">最终叶子节点 #${contrib.leaf_id}（包含 ${contrib.leaf_samples} 个训练样本）</div>
+                </div>`;
+            }
+            
+            html += `</div>`;
+        }
+
+        if (p.feature_contribution_error) {
+            html += `<div style="margin-top:12px; padding:8px; background:rgba(0,0,0,0.1); border-radius:6px; font-size:0.8rem; opacity:0.8;">
+                ⚠️ 特征贡献分析暂不可用：${p.feature_contribution_error}
+            </div>`;
+        }
+
+        html += '</div>';
     });
     area.innerHTML = html;
 }
