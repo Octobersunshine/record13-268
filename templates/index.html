@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>决策树分类服务</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    min-height: 100vh;
+    padding: 20px;
+    color: #333;
+}
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+}
+.header {
+    text-align: center;
+    color: white;
+    margin-bottom: 30px;
+}
+.header h1 { font-size: 2.5rem; margin-bottom: 10px; }
+.header p { opacity: 0.9; font-size: 1.1rem; }
+.card {
+    background: white;
+    border-radius: 16px;
+    padding: 28px;
+    margin-bottom: 24px;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.15);
+}
+.card h2 {
+    color: #4a5568;
+    margin-bottom: 20px;
+    font-size: 1.4rem;
+    border-bottom: 2px solid #e2e8f0;
+    padding-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.card h2::before {
+    content: '';
+    display: inline-block;
+    width: 6px;
+    height: 24px;
+    background: linear-gradient(135deg, #667eea, #764ba2);
+    border-radius: 3px;
+}
+.step-indicator {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 24px;
+    gap: 10px;
+}
+.step {
+    flex: 1;
+    padding: 12px 16px;
+    border-radius: 10px;
+    background: #edf2f7;
+    color: #718096;
+    text-align: center;
+    font-weight: 500;
+    font-size: 0.9rem;
+    transition: all 0.3s;
+    position: relative;
+}
+.step.active {
+    background: linear-gradient(135deg, #667eea, #764ba2);
+    color: white;
+    transform: scale(1.02);
+}
+.step.done {
+    background: #48bb78;
+    color: white;
+}
+.step .num {
+    display: inline-block;
+    width: 24px;
+    height: 24px;
+    line-height: 24px;
+    border-radius: 50%;
+    background: white;
+    color: #667eea;
+    margin-right: 6px;
+    font-weight: bold;
+}
+.btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 24px;
+    border: none;
+    border-radius: 10px;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    background: linear-gradient(135deg, #667eea, #764ba2);
+    color: white;
+}
+.btn:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+.btn-secondary {
+    background: #edf2f7;
+    color: #4a5568;
+}
+.btn-secondary:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+.btn-danger {
+    background: #fc8181;
+}
+.file-upload {
+    border: 2px dashed #cbd5e0;
+    border-radius: 12px;
+    padding: 40px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.3s;
+}
+.file-upload:hover, .file-upload.dragover {
+    border-color: #667eea;
+    background: #f7fafc;
+}
+.file-upload input { display: none; }
+.file-upload .icon { font-size: 3rem; color: #a0aec0; margin-bottom: 12px; }
+.file-upload .hint { color: #718096; font-size: 0.9rem; }
+.form-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 16px;
+    margin-bottom: 20px;
+}
+.form-group { display: flex; flex-direction: column; }
+.form-group label {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #4a5568;
+    margin-bottom: 6px;
+}
+.form-group input, .form-group select {
+    padding: 10px 12px;
+    border: 2px solid #e2e8f0;
+    border-radius: 8px;
+    font-size: 0.95rem;
+    transition: border-color 0.2s;
+}
+.form-group input:focus, .form-group select:focus {
+    outline: none;
+    border-color: #667eea;
+}
+.checkbox-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    max-height: 200px;
+    overflow-y: auto;
+    padding: 12px;
+    border: 2px solid #e2e8f0;
+    border-radius: 8px;
+}
+.checkbox-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    background: #f7fafc;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    cursor: pointer;
+}
+.checkbox-item:hover { background: #edf2f7; }
+table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+    margin-top: 12px;
+}
+table th, table td {
+    padding: 8px 12px;
+    text-align: left;
+    border-bottom: 1px solid #e2e8f0;
+}
+table th {
+    background: #f7fafc;
+    font-weight: 600;
+    color: #4a5568;
+}
+table tr:hover { background: #f7fafc; }
+.metrics {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 14px;
+    margin-bottom: 20px;
+}
+.metric {
+    padding: 16px;
+    border-radius: 12px;
+    background: linear-gradient(135deg, #f6f8fb, #eef2f7);
+    text-align: center;
+}
+.metric .value {
+    font-size: 1.8rem;
+    font-weight: 700;
+    color: #667eea;
+}
+.metric .label {
+    font-size: 0.8rem;
+    color: #718096;
+    margin-top: 4px;
+}
+.metric.primary .value { color: #48bb78; }
+.metric.warning .value { color: #ed8936; }
+.alert {
+    padding: 12px 16px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+    font-size: 0.9rem;
+}
+.alert-error { background: #fed7d7; color: #c53030; border-left: 4px solid #fc8181; }
+.alert-success { background: #c6f6d5; color: #22543d; border-left: 4px solid #48bb78; }
+.alert-info { background: #bee3f8; color: #2c5282; border-left: 4px solid #4299e1; }
+.prediction-row {
+    display: grid;
+    grid-template-columns: 30px 1fr auto;
+    gap: 12px;
+    align-items: center;
+    padding: 12px;
+    background: #f7fafc;
+    border-radius: 8px;
+    margin-bottom: 8px;
+}
+.prediction-row input {
+    padding: 8px 10px;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    width: 100%;
+}
+.prediction-result {
+    background: linear-gradient(135deg, #48bb78, #38a169);
+    color: white;
+    padding: 16px;
+    border-radius: 12px;
+    margin-top: 16px;
+}
+.prediction-result .pred-label {
+    font-size: 1.5rem;
+    font-weight: 700;
+}
+.prob-bars { margin-top: 12px; }
+.prob-item {
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.prob-item .cls { min-width: 80px; font-size: 0.85rem; }
+.prob-item .bar {
+    flex: 1;
+    height: 8px;
+    background: rgba(255,255,255,0.2);
+    border-radius: 4px;
+    overflow: hidden;
+}
+.prob-item .bar-fill {
+    height: 100%;
+    background: white;
+    border-radius: 4px;
+    transition: width 0.5s;
+}
+.prob-item .pct { min-width: 50px; text-align: right; font-size: 0.85rem; }
+.section-subtitle {
+    font-size: 0.9rem;
+    color: #718096;
+    margin-bottom: 10px;
+    font-weight: 500;
+}
+.loading {
+    display: inline-block;
+    width: 18px;
+    height: 18px;
+    border: 2px solid rgba(255,255,255,0.3);
+    border-top-color: white;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.feature-bars { margin-top: 10px; }
+.feat-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+.feat-item .fname { min-width: 120px; font-size: 0.85rem; color: #4a5568; }
+.feat-item .fbar {
+    flex: 1;
+    height: 10px;
+    background: #edf2f7;
+    border-radius: 5px;
+    overflow: hidden;
+}
+.feat-item .fbar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #667eea, #764ba2);
+    border-radius: 5px;
+}
+.feat-item .fval { min-width: 60px; text-align: right; font-size: 0.8rem; color: #667eea; font-weight: 600; }
+.tag {
+    display: inline-block;
+    padding: 3px 10px;
+    background: #e2e8f0;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    color: #4a5568;
+    margin-left: 6px;
+}
+.tag-success { background: #c6f6d5; color: #22543d; }
+</style>
+</head>
+<body>
+<div class="container">
+    <div class="header">
+        <h1>🌳 决策树分类服务</h1>
+        <p>上传训练数据 → 训练决策树模型 → 预测新样本类别</p>
+    </div>
+
+    <div class="step-indicator">
+        <div class="step active" id="step1"><span class="num">1</span>上传数据</div>
+        <div class="step" id="step2"><span class="num">2</span>训练模型</div>
+        <div class="step" id="step3"><span class="num">3</span>预测分类</div>
+    </div>
+
+    <div id="msg-area"></div>
+
+    <div class="card" id="upload-card">
+        <h2>📁 步骤 1：上传训练数据 <span class="tag">CSV 格式</span></h2>
+        <div class="file-upload" id="dropZone">
+            <input type="file" id="fileInput" accept=".csv">
+            <div class="icon">📊</div>
+            <p style="font-weight:600; margin-bottom:6px;">点击或拖拽 CSV 文件到此处</p>
+            <p class="hint">第一行为表头，最后一列或指定列为目标标签</p>
+        </div>
+        <div id="dataset-info" style="display:none; margin-top:20px;"></div>
+    </div>
+
+    <div class="card" id="train-card" style="display:none;">
+        <h2>⚙️ 步骤 2：训练决策树模型</h2>
+        <div class="section-subtitle">配置训练参数（可选调整）</div>
+        <div class="form-grid">
+            <div class="form-group">
+                <label>目标列（分类标签）</label>
+                <select id="targetCol"></select>
+            </div>
+            <div class="form-group">
+                <label>划分准则</label>
+                <select id="criterion">
+                    <option value="gini">Gini 不纯度</option>
+                    <option value="entropy">信息增益 (Entropy)</option>
+                    <option value="log_loss">Log Loss</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>最大深度</label>
+                <input type="number" id="maxDepth" placeholder="默认不限" min="1">
+            </div>
+            <div class="form-group">
+                <label>测试集比例</label>
+                <input type="number" id="testSize" value="0.2" step="0.05" min="0.1" max="0.5">
+            </div>
+            <div class="form-group">
+                <label>最小分裂样本数</label>
+                <input type="number" id="minSplit" value="2" min="2">
+            </div>
+            <div class="form-group">
+                <label>随机种子</label>
+                <input type="number" id="randomState" value="42">
+            </div>
+        </div>
+        <div class="section-subtitle">选择特征列（默认全选，除目标列）</div>
+        <div class="checkbox-group" id="featureChecks"></div>
+        <div style="margin-top:20px; display:flex; gap:12px;">
+            <button class="btn" id="trainBtn">🚀 开始训练</button>
+        </div>
+        <div id="train-result" style="display:none; margin-top:24px;"></div>
+    </div>
+
+    <div class="card" id="predict-card" style="display:none;">
+        <h2>🔮 步骤 3：预测新样本</h2>
+        <div id="predict-form-area"></div>
+        <div style="margin-top:16px; display:flex; gap:12px;">
+            <button class="btn" id="predictBtn">✨ 执行预测</button>
+            <button class="btn btn-secondary" id="addRowBtn">➕ 增加样本</button>
+        </div>
+        <div id="predict-result" style="display:none;"></div>
+    </div>
+</div>
+
+<script>
+let currentDatasetId = null;
+let currentModelId = null;
+let currentFeatureCols = [];
+let currentColumns = [];
+
+function setStep(n) {
+    for (let i = 1; i <= 3; i++) {
+        const el = document.getElementById('step' + i);
+        el.classList.remove('active', 'done');
+        if (i < n) el.classList.add('done');
+        if (i === n) el.classList.add('active');
+    }
+}
+
+function showMsg(type, text) {
+    const area = document.getElementById('msg-area');
+    area.innerHTML = `<div class="alert alert-${type}">${text}</div>`;
+    setTimeout(() => { area.innerHTML = ''; }, 5000);
+}
+
+async function uploadFile(file) {
+    const fd = new FormData();
+    fd.append('file', file);
+    const resp = await fetch('/api/upload', { method: 'POST', body: fd });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || '上传失败');
+    return data;
+}
+
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop', async e => {
+    e.preventDefault();
+    dropZone.classList.remove('dragover');
+    if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', e => { if (e.target.files[0]) handleFile(e.target.files[0]); });
+
+async function handleFile(file) {
+    try {
+        showMsg('info', `正在上传 ${file.name}...`);
+        const data = await uploadFile(file);
+        currentDatasetId = data.dataset_id;
+        currentColumns = data.columns;
+        renderDatasetInfo(data);
+        setupTrainForm(data);
+        document.getElementById('train-card').style.display = 'block';
+        setStep(2);
+        showMsg('success', `上传成功！数据包含 ${data.shape.rows} 行 × ${data.shape.cols} 列`);
+    } catch (err) {
+        showMsg('error', err.message);
+    }
+}
+
+function renderDatasetInfo(data) {
+    const info = document.getElementById('dataset-info');
+    info.style.display = 'block';
+    let html = `<div style="display:flex; gap:10px; align-items:center; margin-bottom:12px; flex-wrap:wrap;">
+        <span class="tag tag-success">${data.filename}</span>
+        <span class="tag">${data.shape.rows} 行</span>
+        <span class="tag">${data.shape.cols} 列</span>
+        <span class="tag">Dataset ID: ${data.dataset_id.slice(0,8)}...</span>
+    </div>`;
+    html += `<div class="section-subtitle">数据预览（前 10 行）</div>`;
+    html += '<div style="overflow-x:auto;"><table><thead><tr>';
+    data.columns.forEach(c => html += `<th>${c}</th>`);
+    html += '</tr></thead><tbody>';
+    data.preview.forEach(row => {
+        html += '<tr>';
+        data.columns.forEach(c => html += `<td>${row[c] ?? ''}</td>`);
+        html += '</tr>';
+    });
+    html += '</tbody></table></div>';
+    info.innerHTML = html;
+}
+
+function setupTrainForm(data) {
+    const targetSel = document.getElementById('targetCol');
+    targetSel.innerHTML = '';
+    data.columns.forEach(c => {
+        const opt = document.createElement('option');
+        opt.value = c;
+        opt.textContent = c;
+        targetSel.appendChild(opt);
+    });
+    if (data.columns.length > 0) targetSel.value = data.columns[data.columns.length - 1];
+
+    const checks = document.getElementById('featureChecks');
+    checks.innerHTML = '';
+    data.columns.forEach(c => {
+        const id = 'feat_' + c;
+        const isTarget = (c === targetSel.value);
+        checks.innerHTML += `<label class="checkbox-item">
+            <input type="checkbox" id="${id}" value="${c}" ${isTarget ? '' : 'checked'}>
+            <span>${c}</span>
+            <span class="tag" style="font-size:0.7rem;">${data.dtypes[c]}</span>
+        </label>`;
+    });
+
+    targetSel.addEventListener('change', () => {
+        data.columns.forEach(c => {
+            const cb = document.getElementById('feat_' + c);
+            if (cb) cb.checked = (c !== targetSel.value);
+        });
+    });
+}
+
+document.getElementById('trainBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('trainBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="loading"></span> 训练中...';
+
+    const featureCols = [];
+    document.querySelectorAll('#featureChecks input:checked').forEach(cb => featureCols.push(cb.value));
+
+    const payload = {
+        dataset_id: currentDatasetId,
+        target_column: document.getElementById('targetCol').value,
+        feature_columns: featureCols,
+        criterion: document.getElementById('criterion').value,
+        max_depth: document.getElementById('maxDepth').value || null,
+        min_samples_split: parseInt(document.getElementById('minSplit').value),
+        test_size: parseFloat(document.getElementById('testSize').value),
+        random_state: parseInt(document.getElementById('randomState').value)
+    };
+
+    try {
+        const resp = await fetch('/api/train', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error || '训练失败');
+
+        currentModelId = data.model_id;
+        currentFeatureCols = featureCols;
+        renderTrainResult(data);
+        setupPredictForm(featureCols);
+        document.getElementById('predict-card').style.display = 'block';
+        setStep(3);
+        showMsg('success', `训练完成！测试集准确率：${(data.test_accuracy * 100).toFixed(2)}%`);
+    } catch (err) {
+        showMsg('error', err.message);
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '🚀 重新训练';
+    }
+});
+
+function renderTrainResult(data) {
+    const area = document.getElementById('train-result');
+    area.style.display = 'block';
+    let html = '';
+    html += `<div style="display:flex; gap:8px; align-items:center; margin-bottom:16px; flex-wrap:wrap;">
+        <span class="tag tag-success">模型 ID: ${data.model_id.slice(0,10)}...</span>
+        ${data.class_names ? `<span class="tag">类别: ${data.class_names.join(', ')}</span>` : ''}
+    </div>`;
+    html += '<div class="metrics">';
+    html += `<div class="metric primary"><div class="value">${(data.test_accuracy * 100).toFixed(2)}%</div><div class="label">测试集准确率</div></div>`;
+    html += `<div class="metric"><div class="value">${(data.train_accuracy * 100).toFixed(2)}%</div><div class="label">训练集准确率</div></div>`;
+    html += `<div class="metric warning"><div class="value">${data.tree_structure.depth}</div><div class="label">树深度</div></div>`;
+    html += `<div class="metric"><div class="value">${data.tree_structure.leaf_count}</div><div class="label">叶子节点数</div></div>`;
+    html += `<div class="metric"><div class="value">${data.tree_structure.node_count}</div><div class="label">总节点数</div></div>`;
+    html += '</div>';
+
+    html += '<div class="section-subtitle">特征重要性</div>';
+    html += '<div class="feature-bars">';
+    const sortedFeats = Object.entries(data.feature_importance).sort((a, b) => b[1] - a[1]);
+    const maxImp = Math.max(...sortedFeats.map(x => x[1]), 0.0001);
+    sortedFeats.forEach(([name, imp]) => {
+        const pct = (imp / maxImp * 100).toFixed(0);
+        html += `<div class="feat-item">
+            <div class="fname">${name}</div>
+            <div class="fbar"><div class="fbar-fill" style="width:${pct}%"></div></div>
+            <div class="fval">${imp.toFixed(4)}</div>
+        </div>`;
+    });
+    html += '</div>';
+
+    area.innerHTML = html;
+}
+
+function setupPredictForm(featureCols) {
+    const area = document.getElementById('predict-form-area');
+    let html = `<div id="sample-rows"></div>`;
+    area.innerHTML = html;
+    addSampleRow(featureCols);
+}
+
+function addSampleRow(featureCols) {
+    const rows = document.getElementById('sample-rows');
+    const idx = rows.children.length;
+    let html = `<div class="prediction-row" data-idx="${idx}">
+        <div style="font-weight:600; color:#667eea;">#${idx + 1}</div>
+        <div class="form-grid" style="margin:0;">`;
+    featureCols.forEach(col => {
+        html += `<div class="form-group"><label>${col}</label><input type="text" data-feat="${col}" placeholder="输入 ${col}"></div>`;
+    });
+    html += `</div><button class="btn btn-danger" style="padding:8px 12px; font-size:0.8rem;" onclick="this.parentElement.remove()">🗑️</button></div>`;
+    rows.insertAdjacentHTML('beforeend', html);
+}
+
+document.getElementById('addRowBtn').addEventListener('click', () => addSampleRow(currentFeatureCols));
+
+document.getElementById('predictBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('predictBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="loading"></span> 预测中...';
+
+    const samples = [];
+    document.querySelectorAll('#sample-rows > .prediction-row').forEach(row => {
+        const sample = {};
+        row.querySelectorAll('input[data-feat]').forEach(inp => {
+            let val = inp.value.trim();
+            const num = parseFloat(val);
+            sample[inp.dataset.feat] = (val !== '' && !isNaN(num)) ? num : val;
+        });
+        samples.push(sample);
+    });
+
+    if (samples.length === 0 || samples.every(s => Object.keys(s).length === 0)) {
+        showMsg('error', '请至少填写一个样本的特征值');
+        btn.disabled = false;
+        btn.innerHTML = '✨ 执行预测';
+        return;
+    }
+
+    try {
+        const resp = await fetch('/api/predict', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model_id: currentModelId, samples })
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error || '预测失败');
+        renderPredictResult(data);
+    } catch (err) {
+        showMsg('error', err.message);
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '✨ 执行预测';
+    }
+});
+
+function renderPredictResult(data) {
+    const area = document.getElementById('predict-result');
+    area.style.display = 'block';
+    let html = `<h3 style="color:#4a5568; margin-bottom:16px;">📋 预测结果（共 ${data.prediction_count} 个样本）</h3>`;
+    data.predictions.forEach((p, i) => {
+        html += `<div class="prediction-result" style="margin-bottom:16px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                <span style="opacity:0.9;">样本 #${i + 1}</span>
+                <span class="pred-label">🏷️ ${p.prediction}</span>
+            </div>
+            <div class="prob-bars">`;
+        const sortedProbs = Object.entries(p.probabilities).sort((a, b) => b[1] - a[1]);
+        sortedProbs.forEach(([cls, prob]) => {
+            const pct = (prob * 100).toFixed(1);
+            html += `<div class="prob-item">
+                <div class="cls">${cls}</div>
+                <div class="bar"><div class="bar-fill" style="width:${pct}%"></div></div>
+                <div class="pct">${pct}%</div>
+            </div>`;
+        });
+        html += '</div></div>';
+    });
+    area.innerHTML = html;
+}
+</script>
+</body>
+</html>
