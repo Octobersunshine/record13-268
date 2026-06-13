@@ -212,6 +212,7 @@ table tr:hover { background: #f7fafc; }
 }
 .metric.primary .value { color: #48bb78; }
 .metric.warning .value { color: #ed8936; }
+.metric.danger .value { color: #e53e3e; }
 .alert {
     padding: 12px 16px;
     border-radius: 8px;
@@ -363,8 +364,8 @@ table tr:hover { background: #f7fafc; }
                 </select>
             </div>
             <div class="form-group">
-                <label>最大深度</label>
-                <input type="number" id="maxDepth" placeholder="默认不限" min="1">
+                <label>最大深度 <span class="tag" id="depthSuggestion" style="display:none;">推荐:</span></label>
+                <input type="number" id="maxDepth" placeholder="自动推荐" min="1" max="100">
             </div>
             <div class="form-group">
                 <label>测试集比例</label>
@@ -373,6 +374,14 @@ table tr:hover { background: #f7fafc; }
             <div class="form-group">
                 <label>最小分裂样本数</label>
                 <input type="number" id="minSplit" value="2" min="2">
+            </div>
+            <div class="form-group">
+                <label>最小叶子样本数</label>
+                <input type="number" id="minLeaf" value="1" min="1">
+            </div>
+            <div class="form-group">
+                <label>剪枝系数 α (ccp_alpha)</label>
+                <input type="number" id="ccpAlpha" value="0" step="0.001" min="0" max="1" placeholder="0=不剪枝">
             </div>
             <div class="form-group">
                 <label>随机种子</label>
@@ -490,6 +499,18 @@ function setupTrainForm(data) {
     });
     if (data.columns.length > 0) targetSel.value = data.columns[data.columns.length - 1];
 
+    const nSamples = data.shape.rows;
+    const suggestedDepth = Math.max(3, Math.min(20, Math.floor(Math.log2(Math.max(nSamples, 2))) - 1));
+    document.getElementById('maxDepth').value = suggestedDepth;
+    const depthSuggestion = document.getElementById('depthSuggestion');
+    depthSuggestion.textContent = `推荐: ${suggestedDepth}`;
+    depthSuggestion.style.display = 'inline-block';
+
+    const suggestedLeaf = Math.max(1, Math.floor(nSamples * 0.02));
+    if (suggestedLeaf > 1) {
+        document.getElementById('minLeaf').value = suggestedLeaf;
+    }
+
     const checks = document.getElementById('featureChecks');
     checks.innerHTML = '';
     data.columns.forEach(c => {
@@ -525,6 +546,8 @@ document.getElementById('trainBtn').addEventListener('click', async () => {
         criterion: document.getElementById('criterion').value,
         max_depth: document.getElementById('maxDepth').value || null,
         min_samples_split: parseInt(document.getElementById('minSplit').value),
+        min_samples_leaf: parseInt(document.getElementById('minLeaf').value),
+        ccp_alpha: parseFloat(document.getElementById('ccpAlpha').value),
         test_size: parseFloat(document.getElementById('testSize').value),
         random_state: parseInt(document.getElementById('randomState').value)
     };
@@ -557,13 +580,31 @@ function renderTrainResult(data) {
     const area = document.getElementById('train-result');
     area.style.display = 'block';
     let html = '';
+
+    if (data.has_overfitting_warning && data.overfitting_warnings && data.overfitting_warnings.length > 0) {
+        html += '<div class="alert alert-error" style="margin-bottom:16px;">';
+        html += '<strong>⚠️ 过拟合警告：</strong><ul style="margin-left:20px; margin-top:8px;">';
+        data.overfitting_warnings.forEach(w => {
+            html += `<li style="margin-bottom:4px;">${w}</li>`;
+        });
+        html += '</ul></div>';
+    }
+
+    const gapPct = (data.accuracy_gap * 100).toFixed(1);
+    let gapClass = 'primary';
+    if (data.accuracy_gap > 0.15) gapClass = 'danger';
+    else if (data.accuracy_gap > 0.08) gapClass = 'warning';
+
     html += `<div style="display:flex; gap:8px; align-items:center; margin-bottom:16px; flex-wrap:wrap;">
         <span class="tag tag-success">模型 ID: ${data.model_id.slice(0,10)}...</span>
         ${data.class_names ? `<span class="tag">类别: ${data.class_names.join(', ')}</span>` : ''}
+        <span class="tag">最大深度: ${data.max_depth_used}</span>
+        ${!data.user_specified_depth ? '<span class="tag">（自动推荐）</span>' : ''}
     </div>`;
     html += '<div class="metrics">';
     html += `<div class="metric primary"><div class="value">${(data.test_accuracy * 100).toFixed(2)}%</div><div class="label">测试集准确率</div></div>`;
     html += `<div class="metric"><div class="value">${(data.train_accuracy * 100).toFixed(2)}%</div><div class="label">训练集准确率</div></div>`;
+    html += `<div class="metric ${gapClass}"><div class="value">${gapPct}%</div><div class="label">准确率差距</div></div>`;
     html += `<div class="metric warning"><div class="value">${data.tree_structure.depth}</div><div class="label">树深度</div></div>`;
     html += `<div class="metric"><div class="value">${data.tree_structure.leaf_count}</div><div class="label">叶子节点数</div></div>`;
     html += `<div class="metric"><div class="value">${data.tree_structure.node_count}</div><div class="label">总节点数</div></div>`;

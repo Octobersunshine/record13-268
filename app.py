@@ -113,6 +113,7 @@ def train_model():
     max_depth = req.get('max_depth')
     min_samples_split = int(req.get('min_samples_split', 2))
     min_samples_leaf = int(req.get('min_samples_leaf', 1))
+    ccp_alpha = float(req.get('ccp_alpha', 0.0))
 
     if not dataset_id or not target_col:
         return jsonify({'error': '缺少必要参数: dataset_id 和 target_column'}), 400
@@ -122,6 +123,8 @@ def train_model():
 
     try:
         df = pd.read_csv(data_store[dataset_id]['filepath'])
+        n_samples = len(df)
+        n_features = len([c for c in df.columns if c != target_col]) if not feature_cols else len(feature_cols)
 
         if target_col not in df.columns:
             return jsonify({'error': f'目标列 {target_col} 不存在'}), 400
@@ -132,6 +135,23 @@ def train_model():
         missing = [c for c in feature_cols if c not in df.columns]
         if missing:
             return jsonify({'error': f'特征列不存在: {missing}'}), 400
+
+        import math
+        suggested_max_depth = max(3, min(20, int(math.log2(max(n_samples, 2))) - 1))
+
+        if max_depth is None or max_depth == '' or (isinstance(max_depth, str) and max_depth.strip() == ''):
+            max_depth = suggested_max_depth
+            user_specified_depth = False
+        else:
+            max_depth = int(max_depth)
+            user_specified_depth = True
+
+        if min_samples_leaf < 1:
+            min_samples_leaf = 1
+        if min_samples_split < 2:
+            min_samples_split = 2
+        if ccp_alpha < 0:
+            ccp_alpha = 0.0
 
         X = df[feature_cols].copy()
         y = df[target_col].copy()
@@ -157,6 +177,7 @@ def train_model():
             max_depth=max_depth if max_depth else None,
             min_samples_split=min_samples_split,
             min_samples_leaf=min_samples_leaf,
+            ccp_alpha=ccp_alpha,
             random_state=random_state
         )
 
@@ -167,6 +188,36 @@ def train_model():
 
         train_acc = accuracy_score(y_train, y_train_pred)
         test_acc = accuracy_score(y_test, y_test_pred)
+
+        acc_gap = train_acc - test_acc
+        overfitting_warnings = []
+
+        if acc_gap > 0.15:
+            overfitting_warnings.append(
+                f'检测到严重过拟合：训练准确率比测试高 {acc_gap*100:.1f} 个百分点'
+            )
+        elif acc_gap > 0.08:
+            overfitting_warnings.append(
+                f'存在轻度过拟合：训练准确率比测试高 {acc_gap*100:.1f} 个百分点'
+            )
+
+        actual_depth = clf.get_depth()
+        if not user_specified_depth and actual_depth >= max_depth:
+            overfitting_warnings.append(
+                f'树已达到最大深度限制 {max_depth}，建议尝试增大 max_depth 或调整 ccp_alpha'
+            )
+
+        if ccp_alpha == 0.0 and acc_gap > 0.1:
+            suggested_alpha = round(acc_gap * 0.01, 4)
+            overfitting_warnings.append(
+                f'建议启用剪枝：尝试设置 ccp_alpha ≈ {suggested_alpha} 来缓解过拟合'
+            )
+
+        if min_samples_leaf == 1 and acc_gap > 0.1:
+            suggested_leaf = max(2, int(n_samples * 0.02))
+            overfitting_warnings.append(
+                f'建议增大 min_samples_leaf 到 {suggested_leaf} 左右，限制叶子节点样本数'
+            )
 
         class_names = None
         if '__target__' in label_encoders:
@@ -213,15 +264,27 @@ def train_model():
             'train_time': datetime.now().isoformat()
         }
 
-        return jsonify({
+        response = {
             'model_id': model_id,
             'train_accuracy': round(float(train_acc), 4),
             'test_accuracy': round(float(test_acc), 4),
+            'accuracy_gap': round(float(acc_gap), 4),
             'feature_importance': feature_importance,
             'tree_structure': tree_structure,
             'classification_report': report,
-            'class_names': class_names
-        })
+            'class_names': class_names,
+            'max_depth_used': max_depth,
+            'suggested_max_depth': suggested_max_depth,
+            'user_specified_depth': user_specified_depth,
+            'overfitting_warnings': overfitting_warnings
+        }
+
+        if overfitting_warnings:
+            response['has_overfitting_warning'] = True
+        else:
+            response['has_overfitting_warning'] = False
+
+        return jsonify(response)
 
     except Exception as e:
         return jsonify({'error': f'训练失败: {str(e)}'}), 500
